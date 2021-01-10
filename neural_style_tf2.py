@@ -1,9 +1,15 @@
 # import tensorflow as tf
 from ArgParser import ArgParser
 from Util import *
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
-tf.disable_v2_behavior()
+tf.compat.v1.disable_v2_behavior()
+
+import tensorflow_probability as tfp
+
+print(f'tfp version {tfp.__version__}')
+print("-----------------")
+
 import numpy as np
 import scipy.io
 import struct
@@ -13,14 +19,9 @@ import cv2
 import os
 
 '''
-  parsing and configuration
-'''
-
-'''
   pre-trained vgg19 convolutional neural network
   remark: layers are manually initialized for clarity.
 '''
-
 
 def build_model(input_img):
     if args.verbose: print('\nBUILDING VGG-19 NETWORK')
@@ -100,7 +101,7 @@ def build_model(input_img):
 
 
 def conv_layer(layer_name, layer_input, W):
-    conv = tf.nn.conv2d(layer_input, W, strides=[1, 1, 1, 1], padding='SAME')
+    conv = tf.nn.conv2d(input=layer_input, filters=W, strides=[1, 1, 1, 1], padding='SAME')
     if args.verbose: print(('--{} | shape={} | weights_shape={}'.format(layer_name,
                                                                         conv.get_shape(), W.get_shape())))
     return conv
@@ -116,11 +117,11 @@ def relu_layer(layer_name, layer_input, b):
 
 def pool_layer(layer_name, layer_input):
     if args.pooling_type == 'avg':
-        pool = tf.nn.avg_pool(layer_input, ksize=[1, 2, 2, 1],
-                              strides=[1, 2, 2, 1], padding='SAME')
+        pool = tf.nn.avg_pool2d(input=layer_input, ksize=[1, 2, 2, 1],
+                                strides=[1, 2, 2, 1], padding='SAME')
     elif args.pooling_type == 'max':
-        pool = tf.nn.max_pool(layer_input, ksize=[1, 2, 2, 1],
-                              strides=[1, 2, 2, 1], padding='SAME')
+        pool = tf.nn.max_pool2d(input=layer_input, ksize=[1, 2, 2, 1],
+                                strides=[1, 2, 2, 1], padding='SAME')
     if args.verbose:
         print(('--{}   | shape={}'.format(layer_name, pool.get_shape())))
     return pool
@@ -153,7 +154,7 @@ def content_layer_loss(p, x):
         K = 1. / (N * M)
     elif args.content_loss_function == 3:
         K = 1. / 2.
-    loss = K * tf.reduce_sum(tf.pow((x - p), 2))
+    loss = K * tf.reduce_sum(input_tensor=tf.pow((x - p), 2))
     return loss
 
 
@@ -163,20 +164,20 @@ def style_layer_loss(a, x):
     N = d.value
     A = gram_matrix(a, M, N)
     G = gram_matrix(x, M, N)
-    loss = (1. / (4 * N ** 2 * M ** 2)) * tf.reduce_sum(tf.pow((G - A), 2))
+    loss = (1. / (4 * N ** 2 * M ** 2)) * tf.reduce_sum(input_tensor=tf.pow((G - A), 2))
     return loss
 
 
 def gram_matrix(x, area, depth):
     F = tf.reshape(x, (area, depth))
-    G = tf.matmul(tf.transpose(F), F)
+    G = tf.matmul(tf.transpose(a=F), F)
     return G
 
 
 def mask_style_layer(a, x, mask_img):
     _, h, w, d = a.get_shape()
     mask = get_mask_image(mask_img, w.value, h.value)
-    mask = tf.convert_to_tensor(mask)
+    mask = tf.convert_to_tensor(value=mask)
     tensors = []
     for _ in range(d.value):
         tensors.append(mask)
@@ -198,7 +199,7 @@ def sum_masked_style_losses(sess, net, style_imgs):
         for layer, weight in zip(args.style_layers, args.style_layer_weights):
             a = sess.run(net[layer])
             x = net[layer]
-            a = tf.convert_to_tensor(a)
+            a = tf.convert_to_tensor(value=a)
             a, x = mask_style_layer(a, x, img_mask)
             style_loss += style_layer_loss(a, x) * weight
         style_loss /= float(len(args.style_layers))
@@ -216,7 +217,7 @@ def sum_style_losses(sess, net, style_imgs):
         for layer, weight in zip(args.style_layers, args.style_layer_weights):
             a = sess.run(net[layer])
             x = net[layer]
-            a = tf.convert_to_tensor(a)
+            a = tf.convert_to_tensor(value=a)
             style_loss += style_layer_loss(a, x) * weight
         style_loss /= float(len(args.style_layers))
         total_style_loss += (style_loss * img_weight)
@@ -230,7 +231,7 @@ def sum_content_losses(sess, net, content_img):
     for layer, weight in zip(args.content_layers, args.content_layer_weights):
         p = sess.run(net[layer])
         x = net[layer]
-        p = tf.convert_to_tensor(p)
+        p = tf.convert_to_tensor(value=p)
         content_loss += content_layer_loss(p, x) * weight
     content_loss /= float(len(args.content_layers))
     return content_loss
@@ -244,7 +245,7 @@ def sum_content_losses(sess, net, content_img):
 def temporal_loss(x, w, c):
     c = c[np.newaxis, :, :, :]
     D = float(x.size)
-    loss = (1. / D) * tf.reduce_sum(c * tf.nn.l2_loss(x - w))
+    loss = (1. / D) * tf.reduce_sum(input_tensor=c * tf.nn.l2_loss(x - w))
     loss = tf.cast(loss, tf.float32)
     return loss
 
@@ -360,7 +361,7 @@ def check_image(img, path):
 
 
 def stylize(content_img, style_imgs, init_img, frame=None):
-    with tf.device(args.device), tf.Session() as sess:
+    with tf.device(args.device), tf.compat.v1.Session() as sess:
         # setup network
         net = build_model(content_img)
 
@@ -413,7 +414,7 @@ def stylize(content_img, style_imgs, init_img, frame=None):
 
 def minimize_with_lbfgs(sess, net, optimizer, init_img):
     if args.verbose: print('\nMINIMIZING LOSS USING: L-BFGS OPTIMIZER')
-    init_op = tf.global_variables_initializer()
+    init_op = tf.compat.v1.global_variables_initializer()
     sess.run(init_op)
     sess.run(net['input'].assign(init_img))
     optimizer.minimize(sess)
@@ -422,7 +423,7 @@ def minimize_with_lbfgs(sess, net, optimizer, init_img):
 def minimize_with_adam(sess, net, optimizer, init_img, loss):
     if args.verbose: print('\nMINIMIZING LOSS USING: ADAM OPTIMIZER')
     train_op = optimizer.minimize(loss)
-    init_op = tf.global_variables_initializer()
+    init_op = tf.compat.v1.global_variables_initializer()
     sess.run(init_op)
     sess.run(net['input'].assign(init_img))
     iterations = 0
@@ -437,14 +438,21 @@ def minimize_with_adam(sess, net, optimizer, init_img, loss):
 def get_optimizer(loss):
     print_iterations = args.print_iterations if args.verbose else 0
     if args.optimizer == 'lbfgs':
-        optimizer = tf.contrib.opt.ScipyOptimizerInterface(
+        optimizer = tfp.optimizer.lbfgs_minimize(
             loss,
             method='L-BFGS-B',
             options={'maxiter': args.max_iterations,
                      'disp': print_iterations}
         )
+
+    # optimizer = tf.contrib.opt.ScipyOptimizerInterface(
+    #         loss,
+    #         method='L-BFGS-B',
+    #         options={'maxiter': args.max_iterations,
+    #                  'disp': print_iterations}
+    #     )
     elif args.optimizer == 'adam':
-        optimizer = tf.train.AdamOptimizer(args.learning_rate)
+        optimizer = tf.compat.v1.train.AdamOptimizer(args.learning_rate)
     return optimizer
 
 
